@@ -17,15 +17,16 @@ class NGramLanguageModeler(nn.Module):
     def __init__(self, vocab_size, embedding_dim, context_size):
         super(NGramLanguageModeler, self).__init__()
         self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-        self.linear1 = nn.Linear(context_size * embedding_dim, 128)
-        self.linear2 = nn.Linear(128, vocab_size)
+        self.ngram_stack = nn.Sequential(
+            nn.Linear(context_size * embedding_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, vocab_size),
+        )
 
     def forward(self, inputs):
         embeds = self.embeddings(inputs).view((1, -1))
-        out = F.relu(self.linear1(embeds))
-        out = self.linear2(out)
-        log_probs = F.log_softmax(out, dim=1)
-        return log_probs
+        logits = self.ngram_stack(embeds)
+        return F.log_softmax(logits, dim=1)
 
 
 def text_to_ngrams(sentences: list[str]) -> list[tuple[list[str], str]]:
@@ -36,6 +37,16 @@ def text_to_ngrams(sentences: list[str]) -> list[tuple[list[str], str]]:
         )
         for i in range(CONTEXT_SIZE, len(sentences))
     ]
+
+
+def word_to_index(sentences):
+    vocab = {}
+    ix = 0
+    for w in sentences:
+        if w not in vocab:
+            vocab[w] = ix
+            ix += 1
+    return vocab
 
 
 def run_ngram() -> None:
@@ -65,16 +76,17 @@ And see thy blood warm when thou feel'st it cold.
     # Each tuple is ([ word_i-CONTEXT_SIZE, ..., word_i-1 ], target word)
     # Print the first 3, just so you can see what they look like.
 
-    vocab = set(sentences)
-    print(f"vocab size={len(vocab)}")
-    word_to_ix = {word: i for i, word in enumerate(vocab)}
+    word_to_ix = word_to_index(sentences)
+    vocab_size = len(word_to_ix)
+
+    print(f"vocab size={len(word_to_ix)}")
 
     losses = []
     loss_function = nn.NLLLoss()
-    model = NGramLanguageModeler(len(vocab), EMBEDDING_DIM, CONTEXT_SIZE)
+    model = NGramLanguageModeler(vocab_size, EMBEDDING_DIM, CONTEXT_SIZE)
     optimizer = optim.SGD(model.parameters(), lr=0.001)
 
-    for epoch in range(20):
+    for epoch in range(10):
         total_loss = 0
         for context, target in ngrams:
             # Step 1. Prepare the inputs to be passed to the model (i.e, turn the words
@@ -82,8 +94,8 @@ And see thy blood warm when thou feel'st it cold.
             context_idxs = torch.tensor(
                 [word_to_ix[w] for w in context], dtype=torch.long
             )
-            pprint(f"{context=} {target=}")
-            pprint(f"{context_idxs=} {word_to_ix[target]=}")
+            # pprint(f"{context=} {target=}")
+            # pprint(f"{context_idxs=} {word_to_ix[target]=}")
 
             # Step 2. Recall that torch *accumulates* gradients. Before passing in a
             # new instance, you need to zero out the gradients from the old
@@ -93,17 +105,17 @@ And see thy blood warm when thou feel'st it cold.
             # Step 3. Run the forward pass, getting log probabilities over next
             # words
             log_probs = model(context_idxs)
-            pprint(log_probs)
-            pprint(f"{log_probs.shape=} {log_probs.ndim=}")
-            pprint(torch.tensor([word_to_ix[target]], dtype=torch.long))
+            # pprint(log_probs)
+            # pprint(f"{log_probs.shape=} {log_probs.ndim=}")
+            # pprint(torch.tensor([word_to_ix[target]], dtype=torch.long))
 
             # Step 4. Compute your loss function. (Again, Torch wants the target
             # word wrapped in a tensor)
             loss = loss_function(
                 log_probs, torch.tensor([word_to_ix[target]], dtype=torch.long)
             )
-            pprint(f"{loss=}")
-            pprint(f"{log_probs[:, word_to_ix[target]]=}")
+            # pprint(f"{loss=}")
+            # pprint(f"{log_probs[:, word_to_ix[target]]=}")
 
             # Step 5. Do the backward pass and update the gradient
             loss.backward()
@@ -111,26 +123,27 @@ And see thy blood warm when thou feel'st it cold.
 
             # Get the Python number from a 1-element Tensor by calling tensor.item()
             total_loss += loss.item()
-            pprint(f"{loss.item()}")
+        print(f"{epoch=} {total_loss=}")
         losses.append(total_loss)
-    print(losses)  # The loss decreased every iteration over the training data!
 
     # To get the embedding of a particular word, e.g. "beauty"
-    # print(model.embeddings.weight[word_to_ix["beauty"]])
-    # print(model.embeddings.weight[word_to_ix["winters"]])
+    print(model.embeddings.weight[word_to_ix["beauty"]])
+    # tensor([ 0.2509,  0.3671, -0.5116, -0.0997, -0.5093,  1.2391,  0.4230,  0.2663,
+    #          0.0769, -1.0799], grad_fn=<SelectBackward0>)
 
-    # cos = nn.CosineSimilarity(dim=0)
-    # cos_similarities = []
-    # for word in vocab:
-    #     cos_similarities.append(
-    #         (
-    #             cos(
-    #                 model.embeddings.weight[word_to_ix["beautys"]],
-    #                 model.embeddings.weight[word_to_ix[word]],
-    #             ).item(),
-    #             word,
-    #         )
-    #     )
+    cos = nn.CosineSimilarity(dim=0)
+    cos_similarities = []
+    for word in word_to_ix.keys():
+        cos_similarities.append(
+            (
+                cos(
+                    model.embeddings.weight[word_to_ix["beauty"]],
+                    model.embeddings.weight[word_to_ix[word]],
+                ).item(),
+                word,
+            )
+        )
+    print(sorted(cos_similarities)[:5])
 
 
 if __name__ == "__main__":
