@@ -105,6 +105,13 @@ def train(ngrams, word_to_ix) -> NGramLanguageModeler:
     return model
 
 
+def inference(model, context: list[int], ix_to_word):
+    with torch.inference_mode():
+        test = torch.tensor(context)
+        pred = model(test).softmax(dim=1).argmax()
+        print(ix_to_word[pred.item()])
+
+
 def run_ngram() -> None:
     text = """
 When forty winters shall besiege thy brow,
@@ -134,11 +141,17 @@ And see thy blood warm when thou feel'st it cold.
     ngrams = text_to_ngrams(tokens)
 
     word_to_ix = word_to_index(tokens)
+    ix_to_word = {v: k for k, v in word_to_ix.items()}
 
     model_file = Path("./ngram.safetensor")
     if not model_file.exists():
         model = train(ngrams, word_to_ix)
         torch.save(model.state_dict(), model_file)
+    model = NGramLanguageModeler(len(word_to_ix), EMBEDDING_DIM, CONTEXT_SIZE)
+    model.load_state_dict(torch.load(model_file, weights_only=True))
+
+    given_context = [word_to_ix["besiege"], word_to_ix["thy"]]
+    inference(model, given_context, ix_to_word)
 
 
 if __name__ == "__main__":
