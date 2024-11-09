@@ -52,12 +52,11 @@ def word_to_index(sentences):
 
 
 def ngrams(tokens: list[str]):
-    print("I am here")
     contexts = []
     targets = []
     for i in range(CONTEXT_SIZE, len(tokens)):
         contexts += [tokens[i - CONTEXT_SIZE : i]]
-        targets += [[tokens[i]]]
+        targets += [tokens[i]]
     return contexts, targets
 
 
@@ -148,12 +147,11 @@ def fit(input_tensor, label_tensor, word_to_ix):
         model.zero_grad()
 
         log_probs = model(input_tensor)
-        # FIXME: fix label_tensor upstream
-        loss = loss_function(log_probs, torch.squeeze(label_tensor))
+        loss = loss_function(log_probs, label_tensor)
 
         loss.backward()
         optimizer.step()
-        print(f"{epoch=} {loss=}")
+        pprint(f"{epoch=} {loss=}")
         losses.append(loss)
 
     return model
@@ -168,7 +166,7 @@ def inference(model, context: list[int], ix_to_word):
 
 def generate_training_data(contexts, targets, word_to_ix):
     context_idxs = list(map(lambda c: [word_to_ix[w] for w in c], contexts))
-    target_idxs = list(map(lambda c: [word_to_ix[w] for w in c], targets))
+    target_idxs = [word_to_ix[w] for w in targets]
 
     input_tensor = torch.tensor(context_idxs)
     label_tensor = torch.tensor(target_idxs)
@@ -194,7 +192,6 @@ And see thy blood warm when thou feel'st it cold.
 """
 
     text2 = """
-Here is a larger dataset that you can use to train your N-gram model:
 The quick brown fox jumps over the lazy dog. She sells seashells by the seashore. Peter Piper picked a peck of pickled peppers. How much wood would a woodchuck chuck if a woodchuck could chuck wood? Curiosity killed the cat, but satisfaction brought it back. A stitch in time saves nine. The early bird catches the worm. All that glitters is not gold. Actions speak louder than words. The pen is mightier than the sword.
 """
 
@@ -213,6 +210,8 @@ The quick brown fox jumps over the lazy dog. She sells seashells by the seashore
     input_tensor, label_tensor = generate_training_data(
         contexts, targets, word_to_ix
     )
+    print(label_tensor.shape)
+    print(label_tensor.ndim)
 
     model_file = Path("./ngram.safetensor")
     if not model_file.exists():
