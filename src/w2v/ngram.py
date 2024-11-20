@@ -4,6 +4,7 @@ from pathlib import Path
 from pprint import pprint
 
 import ftfy
+import numpy as np
 import spacy
 import torch
 import torch.nn as nn
@@ -118,7 +119,9 @@ class NGramModel(nn.Module):
         return F.log_softmax(logits, dim=1)
 
 
-def fit(input_tensor, label_tensor, word_to_ix):
+def fit(
+    input_tensor, label_tensor, word_to_ix
+) -> tuple[NGramModel, dict[int, np.ndarray]]:
     vocab_size = len(word_to_ix)
     print(f"vocab size={len(word_to_ix)}")
 
@@ -128,6 +131,7 @@ def fit(input_tensor, label_tensor, word_to_ix):
     pprint(model)
     optimizer = optim.SGD(model.parameters(), lr=0.01)
 
+    embed_history = {}
     for epoch in range(NUM_EPOCH):
         model.train()
         model.zero_grad()
@@ -138,9 +142,13 @@ def fit(input_tensor, label_tensor, word_to_ix):
         loss.backward()
         optimizer.step()
         pprint(f"{epoch=} {loss=}")
+        if epoch % 10 == 0:
+            embed_history[epoch] = model.embeddings.weight.detach().numpy()
         losses.append(loss)
 
-    return model
+    embed_history[NUM_EPOCH] = model.embeddings.weight.detach().numpy()
+
+    return model, embed_history
 
 
 # TODO: generate paragraph sentence starting from first CONTEXT_SIZE words
@@ -233,7 +241,7 @@ def run_ngram() -> None:
 
     model_file = Path("./ngram.safetensor")
     # if not model_file.exists():
-    model = fit(input_tensor, label_tensor, word_to_ix)
+    model, embed_history = fit(input_tensor, label_tensor, word_to_ix)
     torch.save(model.state_dict(), model_file)
 
     model = NGramLanguageModeler(len(word_to_ix), EMBEDDING_DIM, CONTEXT_SIZE)
