@@ -1,3 +1,4 @@
+import sys
 from collections import OrderedDict
 from pathlib import Path
 from pprint import pprint
@@ -9,10 +10,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-CONTEXT_SIZE = 2
-EMBEDDING_DIM = 10
-NUM_NEURONS = 128
-NUM_EPOCH = 20
+CONTEXT_SIZE = 6
+EMBEDDING_DIM = 16
+NUM_NEURONS = 256
+NUM_EPOCH = 500
 
 SEED = 42
 torch.manual_seed(SEED)
@@ -39,25 +40,6 @@ def text_to_ngrams(sentences: list[str]) -> list[tuple[list[str], str]]:
         (sentences[i - CONTEXT_SIZE : i], sentences[i])
         for i in range(CONTEXT_SIZE, len(sentences))
     ]
-
-
-def word_to_index(sentences):
-    vocab = OrderedDict()
-    ix = 0
-    for w in sentences:
-        if w not in vocab:
-            vocab[w] = ix
-            ix += 1
-    return vocab
-
-
-def ngrams(tokens: list[str]):
-    contexts = []
-    targets = []
-    for i in range(CONTEXT_SIZE, len(tokens)):
-        contexts += [tokens[i - CONTEXT_SIZE : i]]
-        targets += [tokens[i]]
-    return contexts, targets
 
 
 def train_loopy(ngrams, word_to_ix) -> NGramLanguageModeler:
@@ -125,9 +107,13 @@ class NGramModel(nn.Module):
         )
 
     def forward(self, inputs):
+        print("---------------inside forward------------------")
+        print(f"{inputs.shape=}")
+        print(self.embeddings)
         embeds = self.embeddings(inputs).view(
             (-1, CONTEXT_SIZE * EMBEDDING_DIM)
         )
+        print(embeds.shape)
         logits = self.ngram_stack(embeds)
         return F.log_softmax(logits, dim=1)
 
@@ -157,11 +143,11 @@ def fit(input_tensor, label_tensor, word_to_ix):
     return model
 
 
-def inference(model, context: list[int], ix_to_word):
-    with torch.inference_mode():
-        test = torch.tensor(context)
-        pred = model(test).softmax(dim=1).argmax()
-        print(ix_to_word[pred.item()])
+# TODO: generate paragraph sentence starting from first CONTEXT_SIZE words
+# TODO: plot distro of target work given context
+# TODO: project into 2d space to see the distance between word embeddings
+# at certain epoch, e.g. every 10th
+# TODO: implement device
 
 
 def generate_training_data(contexts, targets, word_to_ix):
@@ -173,53 +159,87 @@ def generate_training_data(contexts, targets, word_to_ix):
     return input_tensor, label_tensor
 
 
-def run_ngram() -> None:
-    text = """
-When forty winters shall besiege thy brow,
-And dig deep trenches in thy beauty's field,
-Thy youth's proud livery so gazed on now,
-Will be a totter'd weed of small worth held:
-Then being asked, where all thy beauty lies,
-Where all the treasure of thy lusty days;
-To say, within thine own deep sunken eyes,
-Were an all-eating shame, and thriftless praise.
-How much more praise deserv'd thy beauty's use,
-If thou couldst answer 'This fair child of mine
-Shall sum my count, and make my old excuse,'
-Proving his beauty by succession thine!
-This were to be new made when thou art old,
-And see thy blood warm when thou feel'st it cold.
-"""
+def preprocess(text: str) -> str:
+    return ftfy.fix_text(text)
 
-    text2 = """
-The quick brown fox jumps over the lazy dog. She sells seashells by the seashore. Peter Piper picked a peck of pickled peppers. How much wood would a woodchuck chuck if a woodchuck could chuck wood? Curiosity killed the cat, but satisfaction brought it back. A stitch in time saves nine. The early bird catches the worm. All that glitters is not gold. Actions speak louder than words. The pen is mightier than the sword.
-"""
 
-    text = ftfy.fix_text(text2)
+def tokenize(text: str) -> list[str]:
     nlp = spacy.load("en_core_web_sm")
     doc = nlp(text)
-    tokens = [
-        t.text.lower()
-        for t in doc
-        if not t.is_digit and not t.is_punct and not t.is_space
-    ]
+    return [t.text for t in doc if not t.is_digit and not t.is_space]
+
+
+def word_to_index(sentences):
+    vocab = OrderedDict()
+    ix = 0
+    for w in sentences:
+        if w not in vocab:
+            vocab[w] = ix
+            ix += 1
+    return vocab
+
+
+def ngrams(tokens: list[str]):
+    contexts = []
+    targets = []
+    for i in range(CONTEXT_SIZE, len(tokens)):
+        contexts += [tokens[i - CONTEXT_SIZE : i]]
+        targets += [tokens[i]]
+    return contexts, targets
+
+
+def generate_sentence(text_fspath: str, model, word_to_ix):
+    test_text = ""
+    with open(text_fspath, "r") as fIN:
+        test_text = fIN.read()
+
+    test_text = preprocess(test_text)
+    test_tokens = tokenize(test_text)
+    contexts, _ = ngrams(test_tokens)
+    ix_to_word = {v: k for k, v in word_to_ix.items()}
+    context_idxs = list(map(lambda c: [word_to_ix[w] for w in c], contexts))
+
+    print("---------------inference------------------")
+    sentences = contexts[0]
+    with torch.inference_mode():
+        cur_context = context_idxs[0]
+        while len(sentences) <= len(test_tokens):
+            test = torch.tensor(cur_context)
+            pred_target_idx = model(test).softmax(dim=1).argmax()
+            pred_target = ix_to_word[pred_target_idx.item()]
+            sentences.append(pred_target)
+            cur_context = cur_context[1:] + [pred_target_idx.item()]
+
+        print(" ".join(sentences))
+        print(test_text)
+
+
+def run_ngram() -> None:
+    train_text_fspath = sys.argv[1]
+    test_text_fspath = sys.argv[2]
+
+    train_text = ""
+    with open(train_text_fspath, "r") as fIN:
+        train_text = fIN.read()
+
+    text = preprocess(train_text)
+    tokens = tokenize(text)
     contexts, targets = ngrams(tokens)
 
     word_to_ix = word_to_index(tokens)
-    ix_to_word = {v: k for k, v in word_to_ix.items()}
     input_tensor, label_tensor = generate_training_data(
         contexts, targets, word_to_ix
     )
-    print(label_tensor.shape)
-    print(label_tensor.ndim)
 
     model_file = Path("./ngram.safetensor")
-    if not model_file.exists():
-        model = fit(input_tensor, label_tensor, word_to_ix)
-        torch.save(model.state_dict(), model_file)
+    # if not model_file.exists():
+    model = fit(input_tensor, label_tensor, word_to_ix)
+    torch.save(model.state_dict(), model_file)
 
     model = NGramLanguageModeler(len(word_to_ix), EMBEDDING_DIM, CONTEXT_SIZE)
     model.load_state_dict(torch.load(model_file, weights_only=True))
+
+    generate_sentence(test_text_fspath, model, word_to_ix)
 
 
 if __name__ == "__main__":
