@@ -12,6 +12,7 @@ def transform_tsne(embedding: np.ndarray):
     return dim_reducer.fit_transform(embedding)
 
 
+# TODO: facets
 def plot_embeds(
     embedding_history: Mapping[int, np.ndarray], word_to_ix: Mapping[str, int]
 ) -> None:
@@ -27,23 +28,13 @@ def plot_embeds(
         )
 
         out_plot = f"ngram.embeds.{nth}.png"
-        plot = (
-            alt.Chart(df)
-            .mark_circle(size=40)
-            .encode(x="column_0:Q", y="column_1:Q")
-            .properties(
-                width=600,
-                height=400,
-            )
-        ) + (
-            alt.Chart(df)
-            .mark_text(align="left", baseline="middle", dx=5)
-            .encode(
-                x="column_0:Q",
-                y="column_1:Q",
-                text="token:N",
-            )
+        base = alt.Chart(df).encode(
+            x="column_0:Q", y="column_1:Q", text="token:N"
         )
+        plot = alt.layer(
+            base.mark_circle(),
+            base.mark_text(align="left", baseline="middle", dx=5),
+        ).properties(width=600, height=400)
         plot.save(
             out_plot,
             ppi=200,
