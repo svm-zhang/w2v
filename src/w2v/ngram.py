@@ -1,3 +1,4 @@
+import pickle
 import sys
 from collections import OrderedDict
 from pathlib import Path
@@ -10,13 +11,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from plot_embeds import plot_embeds
 
-CONTEXT_SIZE = 6
+CONTEXT_SIZE = 10
 EMBEDDING_DIM = 16
 NUM_NEURONS = 256
 NUM_EPOCH = 500
 
-SEED = 42
+SEED = 6969
 torch.manual_seed(SEED)
 
 
@@ -108,13 +110,9 @@ class NGramModel(nn.Module):
         )
 
     def forward(self, inputs):
-        print("---------------inside forward------------------")
-        print(f"{inputs.shape=}")
-        print(self.embeddings)
         embeds = self.embeddings(inputs).view(
             (-1, CONTEXT_SIZE * EMBEDDING_DIM)
         )
-        print(embeds.shape)
         logits = self.ngram_stack(embeds)
         return F.log_softmax(logits, dim=1)
 
@@ -132,6 +130,7 @@ def fit(
     optimizer = optim.SGD(model.parameters(), lr=0.01)
 
     embed_history = {}
+    embed_history[0] = model.embeddings.weight.detach().numpy()
     for epoch in range(NUM_EPOCH):
         model.train()
         model.zero_grad()
@@ -143,7 +142,9 @@ def fit(
         optimizer.step()
         pprint(f"{epoch=} {loss=}")
         if epoch % 10 == 0:
-            embed_history[epoch] = model.embeddings.weight.detach().numpy()
+            embed_history[(epoch / 10) + 1] = (
+                model.embeddings.weight.detach().clone().numpy()
+            )
         losses.append(loss)
 
     embed_history[NUM_EPOCH] = model.embeddings.weight.detach().numpy()
@@ -151,10 +152,7 @@ def fit(
     return model, embed_history
 
 
-# TODO: generate paragraph sentence starting from first CONTEXT_SIZE words
 # TODO: plot distro of target work given context
-# TODO: project into 2d space to see the distance between word embeddings
-# at certain epoch, e.g. every 10th
 # TODO: implement device
 
 
@@ -240,14 +238,22 @@ def run_ngram() -> None:
     )
 
     model_file = Path("./ngram.safetensor")
-    # if not model_file.exists():
-    model, embed_history = fit(input_tensor, label_tensor, word_to_ix)
-    torch.save(model.state_dict(), model_file)
+    embed_file = Path("./ngram.embed_history.pkl")
+    if not model_file.exists():
+        model, embed_history = fit(input_tensor, label_tensor, word_to_ix)
+        torch.save(model.state_dict(), model_file)
+        with open(embed_file, "wb") as f:
+            pickle.dump(embed_history, f)
 
+    print("Found previous model.")
     model = NGramLanguageModeler(len(word_to_ix), EMBEDDING_DIM, CONTEXT_SIZE)
     model.load_state_dict(torch.load(model_file, weights_only=True))
 
     generate_sentence(test_text_fspath, model, word_to_ix)
+
+    with open(embed_file, "rb") as f:
+        embed_history = pickle.load(f)
+        plot_embeds(embed_history, word_to_ix)
 
 
 if __name__ == "__main__":
