@@ -16,7 +16,8 @@ def transform_tsne(embedding: np.ndarray):
 def plot_embeds(
     embedding_history: Mapping[int, np.ndarray], word_to_ix: Mapping[str, int]
 ) -> None:
-    for nth in [0, 24, 49]:
+    embedding_dfs = []
+    for nth in [0, 10, 20, 30, 40, 50]:
         transformed = transform_tsne(embedding_history[nth])
         df = pl.DataFrame(transformed)
         df = df.with_columns(
@@ -24,18 +25,36 @@ def plot_embeds(
                 name="token",
                 values=[k for k in word_to_ix.keys()],
                 dtype=pl.String,
-            )
+            ),
+            nth_epoch=pl.lit(nth),
         )
+        embedding_dfs.append(df)
+    res_df = pl.concat(embedding_dfs)
 
-        out_plot = f"ngram.embeds.{nth}.png"
-        base = alt.Chart(df).encode(
-            x="column_0:Q", y="column_1:Q", text="token:N"
-        )
-        plot = alt.layer(
+    out_plot = "ngram.embeds.png"
+    base = alt.Chart(res_df).encode(
+        x="column_0:Q",
+        y="column_1:Q",
+        text="token:N",
+    )
+    plot = (
+        alt.layer(
             base.mark_circle(),
             base.mark_text(align="left", baseline="middle", dx=5),
-        ).properties(width=600, height=400)
-        plot.save(
-            out_plot,
-            ppi=200,
         )
+        .properties(width=600, height=400)
+        .facet(facet="nth_epoch:N", columns=3)
+        .configure_axis(grid=False)
+        .resolve_axis(
+            x="independent",
+            y="independent",
+        )
+        .resolve_scale(
+            x="independent",
+            y="independent",
+        )
+    )
+    plot.save(
+        out_plot,
+        ppi=200,
+    )
