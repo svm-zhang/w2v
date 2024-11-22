@@ -15,7 +15,7 @@ from plot_embeds import plot_embeds
 
 CONTEXT_SIZE = 10
 EMBEDDING_DIM = 16
-NUM_NEURONS = 256
+NUM_NEURONS = 128
 NUM_EPOCH = 500
 
 SEED = 6969
@@ -102,7 +102,7 @@ def train_loopy(ngrams, word_to_ix) -> NGramLanguageModeler:
 class NGramModel(nn.Module):
     def __init__(self, vocab_size, embedding_dim, context_size):
         super(NGramModel, self).__init__()
-        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
+        self.embeddings = nn.Parameter(torch.rand(vocab_size, embedding_dim))
         self.ngram_stack = nn.Sequential(
             nn.Linear(context_size * embedding_dim, NUM_NEURONS),
             nn.ReLU(),
@@ -110,7 +110,7 @@ class NGramModel(nn.Module):
         )
 
     def forward(self, inputs):
-        embeds = self.embeddings(inputs).view(
+        embeds = self.embeddings[inputs].view(
             (-1, CONTEXT_SIZE * EMBEDDING_DIM)
         )
         logits = self.ngram_stack(embeds)
@@ -126,12 +126,11 @@ def fit(
     losses = []
     loss_function = nn.NLLLoss(reduction="sum")
     model = NGramModel(vocab_size, EMBEDDING_DIM, CONTEXT_SIZE)
-    pprint(model)
     optimizer = optim.SGD(model.parameters(), lr=0.01)
 
     embed_history = {}
-    embed_history[0] = model.embeddings.weight.detach().numpy()
-    for epoch in range(NUM_EPOCH):
+    embed_history[0] = model.embeddings.data.detach().clone().numpy()
+    for epoch in range(NUM_EPOCH + 1):
         model.train()
         model.zero_grad()
 
@@ -141,19 +140,17 @@ def fit(
         loss.backward()
         optimizer.step()
         pprint(f"{epoch=} {loss=}")
-        if epoch % 10 == 0:
-            embed_history[(epoch / 10) + 1] = (
-                model.embeddings.weight.detach().clone().numpy()
-            )
+        if epoch % 10 == 0 and epoch != 0:
+            nth = int(epoch / 10) + 1
+            embed_history[nth] = model.embeddings.data.detach().clone().numpy()
         losses.append(loss)
-
-    embed_history[NUM_EPOCH] = model.embeddings.weight.detach().numpy()
 
     return model, embed_history
 
 
 # TODO: plot distro of target work given context
 # TODO: implement device
+# TODO: implement top-k nearest neighbors for a given word
 
 
 def generate_training_data(contexts, targets, word_to_ix):
@@ -246,7 +243,7 @@ def run_ngram() -> None:
             pickle.dump(embed_history, f)
 
     print("Found previous model.")
-    model = NGramLanguageModeler(len(word_to_ix), EMBEDDING_DIM, CONTEXT_SIZE)
+    model = NGramModel(len(word_to_ix), EMBEDDING_DIM, CONTEXT_SIZE)
     model.load_state_dict(torch.load(model_file, weights_only=True))
 
     generate_sentence(test_text_fspath, model, word_to_ix)
