@@ -171,16 +171,6 @@ def tokenize(text: str) -> list[str]:
     return [t.text for t in doc if not t.is_digit and not t.is_space]
 
 
-def word_to_index(sentences):
-    vocab = OrderedDict()
-    ix = 0
-    for w in sentences:
-        if w not in vocab:
-            vocab[w] = ix
-            ix += 1
-    return vocab
-
-
 def ngrams(tokens: list[str]):
     contexts = []
     targets = []
@@ -255,7 +245,7 @@ def run_ngram() -> None:
     tokens = tokenize(text)
     contexts, targets = ngrams(tokens)
 
-    word_to_ix = word_to_index(tokens)
+    word_to_ix = {t: i for i, t in enumerate(tokens)}
     input_tensor, label_tensor = generate_training_data(
         contexts, targets, word_to_ix
     )
