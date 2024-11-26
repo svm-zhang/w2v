@@ -1,4 +1,3 @@
-from pprint import pprint
 from typing import Mapping
 
 import altair as alt
@@ -12,10 +11,12 @@ def transform_tsne(embedding: np.ndarray):
     return dim_reducer.fit_transform(embedding)
 
 
-# TODO: facets
 def plot_embeds(
-    embedding_history: Mapping[int, np.ndarray], word_to_ix: Mapping[str, int]
+    embedding_history: Mapping[int, np.ndarray],
+    word_to_ix: Mapping[str, int],
+    highlights: list[str],
 ) -> None:
+    print(highlights)
     embedding_dfs = []
     for nth in [0, 10, 20, 30, 40, 50]:
         transformed = transform_tsne(embedding_history[nth])
@@ -28,14 +29,15 @@ def plot_embeds(
             ),
             nth_epoch=pl.lit(nth),
         )
+        df = df.with_columns(
+            highlight=pl.col("token").is_in(highlights),
+        )
         embedding_dfs.append(df)
     res_df = pl.concat(embedding_dfs)
 
     out_plot = "ngram.embeds.png"
     base = alt.Chart(res_df).encode(
-        x="column_0:Q",
-        y="column_1:Q",
-        text="token:N",
+        x="column_0:Q", y="column_1:Q", text="token:N", color="highlight:N"
     )
     plot = (
         alt.layer(
