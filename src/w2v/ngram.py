@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from plot_embeds import plot_embeds
 
-CONTEXT_SIZE = 10
+CONTEXT_SIZE = 4
 EMBEDDING_DIM = 16
 NUM_NEURONS = 128
 NUM_EPOCH = 500
@@ -140,7 +140,7 @@ def fit(
         loss.backward()
         optimizer.step()
         pprint(f"{epoch=} {loss=}")
-        if epoch % 10 == 0 and epoch != 0:
+        if epoch % 10 == 0:
             nth = int(epoch / 10) + 1
             embed_history[nth] = model.embeddings.data.detach().clone().numpy()
         losses.append(loss)
@@ -150,7 +150,6 @@ def fit(
 
 # TODO: plot distro of target work given context
 # TODO: implement device
-# TODO: implement top-k nearest neighbors for a given word
 
 
 def generate_training_data(contexts, targets, word_to_ix):
@@ -191,6 +190,34 @@ def ngrams(tokens: list[str]):
     return contexts, targets
 
 
+def nearest_neighbor(
+    token: str,
+    embedding: np.ndarray,
+    word_to_ix: dict[str, int],
+    top_k: int,
+):
+    idx = word_to_ix[token]
+    token_embedding = torch.tensor(embedding[idx]).view(1, EMBEDDING_DIM)
+    cos = (
+        F.cosine_similarity(
+            token_embedding, torch.tensor(embedding), dim=1, eps=1e-6
+        )
+        .detach()
+        .numpy()
+    )
+    similarity = sorted(
+        {float(v): i for i, v in enumerate(cos)}.items(), key=lambda x: x[0]
+    )
+    print(similarity)
+    vocab_size = len(word_to_ix)
+    ix_to_word = {v: k for k, v in word_to_ix.items()}
+    nearest_neighbor = [
+        ix_to_word[i]
+        for _, i in similarity[vocab_size - top_k - 1 : vocab_size]
+    ]
+    return nearest_neighbor
+
+
 def generate_sentence(text_fspath: str, model, word_to_ix):
     test_text = ""
     with open(text_fspath, "r") as fIN:
@@ -200,18 +227,17 @@ def generate_sentence(text_fspath: str, model, word_to_ix):
     test_tokens = tokenize(test_text)
     contexts, _ = ngrams(test_tokens)
     ix_to_word = {v: k for k, v in word_to_ix.items()}
-    context_idxs = list(map(lambda c: [word_to_ix[w] for w in c], contexts))
+    context_idxs = map(lambda c: [word_to_ix[w] for w in c], contexts)
 
-    print("---------------inference------------------")
     sentences = contexts[0]
     with torch.inference_mode():
-        cur_context = context_idxs[0]
+        given_context = next(context_idxs)
         while len(sentences) <= len(test_tokens):
-            test = torch.tensor(cur_context)
+            test = torch.tensor(given_context)
             pred_target_idx = model(test).softmax(dim=1).argmax()
             pred_target = ix_to_word[pred_target_idx.item()]
             sentences.append(pred_target)
-            cur_context = cur_context[1:] + [pred_target_idx.item()]
+            given_context = given_context[1:] + [pred_target_idx.item()]
 
         print(" ".join(sentences))
         print(test_text)
@@ -250,7 +276,13 @@ def run_ngram() -> None:
 
     with open(embed_file, "rb") as f:
         embed_history = pickle.load(f)
-        plot_embeds(embed_history, word_to_ix)
+        cluster = nearest_neighbor(
+            "cat",
+            embed_history[len(embed_history) - 1],
+            word_to_ix,
+            top_k=5,
+        )
+        plot_embeds(embed_history, word_to_ix, cluster)
 
 
 if __name__ == "__main__":
