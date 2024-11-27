@@ -1,21 +1,23 @@
 import pickle
 import sys
-from collections import OrderedDict
+from functools import partial
 from pathlib import Path
 from pprint import pprint
 
 import ftfy
 import numpy as np
+import polars as pl
 import spacy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from plot_embeds import plot_embeds
+from plot_target_distro import plot_target_distro
 
-CONTEXT_SIZE = 4
+CONTEXT_SIZE = 5
 EMBEDDING_DIM = 16
-NUM_NEURONS = 128
+NUM_NEURONS = 256
 NUM_EPOCH = 500
 
 SEED = 6969
@@ -45,9 +47,9 @@ def text_to_ngrams(sentences: list[str]) -> list[tuple[list[str], str]]:
     ]
 
 
-def train_loopy(ngrams, word_to_ix) -> NGramLanguageModeler:
-    vocab_size = len(word_to_ix)
-    print(f"vocab size={len(word_to_ix)}")
+def train_loopy(ngrams, token_to_idx) -> NGramLanguageModeler:
+    vocab_size = len(token_to_idx)
+    print(f"vocab size={len(token_to_idx)}")
 
     losses = []
     loss_function = nn.NLLLoss()
@@ -63,10 +65,10 @@ def train_loopy(ngrams, word_to_ix) -> NGramLanguageModeler:
             # Step 1. Prepare the inputs to be passed to the model (i.e, turn the words
             # into integer indices and wrap them in tensors)
             context_idxs = torch.tensor(
-                [word_to_ix[w] for w in context], dtype=torch.long
+                [token_to_idx[w] for w in context], dtype=torch.long
             )
             # pprint(f"{context=} {target=}")
-            # pprint(f"{context_idxs=} {word_to_ix[target]=}")
+            # pprint(f"{context_idxs=} {token_to_idx[target]=}")
 
             # Step 2. Recall that torch *accumulates* gradients. Before passing in a
             # new instance, you need to zero out the gradients from the old
@@ -78,15 +80,16 @@ def train_loopy(ngrams, word_to_ix) -> NGramLanguageModeler:
             log_probs = model(context_idxs)
             # pprint(log_probs)
             # pprint(f"{log_probs.shape=} {log_probs.ndim=}")
-            # pprint(torch.tensor([word_to_ix[target]], dtype=torch.long))
+            # pprint(torch.tensor([token_to_idx[target]], dtype=torch.long))
 
             # Step 4. Compute your loss function. (Again, Torch wants the target
             # word wrapped in a tensor)
             loss = loss_function(
-                log_probs, torch.tensor([word_to_ix[target]], dtype=torch.long)
+                log_probs,
+                torch.tensor([token_to_idx[target]], dtype=torch.long),
             )
             # pprint(f"{loss=}")
-            # pprint(f"{log_probs[:, word_to_ix[target]]=}")
+            # pprint(f"{log_probs[:, token_to_idx[target]]=}")
 
             # Step 5. Do the backward pass and update the gradient
             loss.backward()
@@ -118,10 +121,10 @@ class NGramModel(nn.Module):
 
 
 def fit(
-    input_tensor, label_tensor, word_to_ix
+    input_tensor, label_tensor, token_to_idx
 ) -> tuple[NGramModel, dict[int, np.ndarray]]:
-    vocab_size = len(word_to_ix)
-    print(f"vocab size={len(word_to_ix)}")
+    vocab_size = len(token_to_idx)
+    print(f"vocab size={len(token_to_idx)}")
 
     losses = []
     loss_function = nn.NLLLoss(reduction="sum")
@@ -148,13 +151,13 @@ def fit(
     return model, embed_history
 
 
-# TODO: plot distro of target work given context
+# TODO: implement to add randomness when generating text given context (like temperature)
 # TODO: implement device
 
 
-def generate_training_data(contexts, targets, word_to_ix):
-    context_idxs = list(map(lambda c: [word_to_ix[w] for w in c], contexts))
-    target_idxs = [word_to_ix[w] for w in targets]
+def generate_training_data(contexts, targets, token_to_idx):
+    context_idxs = list(map(lambda c: [token_to_idx[w] for w in c], contexts))
+    target_idxs = [token_to_idx[w] for w in targets]
 
     input_tensor = torch.tensor(context_idxs)
     label_tensor = torch.tensor(target_idxs)
@@ -180,13 +183,23 @@ def ngrams(tokens: list[str]):
     return contexts, targets
 
 
+def token_to_index(tokens: list[str]) -> dict[str, int]:
+    word_to_idx = {}
+    idx = 0
+    for t in tokens:
+        if t not in word_to_idx:
+            word_to_idx[t] = idx
+            idx += 1
+    return word_to_idx
+
+
 def nearest_neighbor(
     token: str,
     embedding: np.ndarray,
-    word_to_ix: dict[str, int],
+    token_to_idx: dict[str, int],
     top_k: int,
 ):
-    idx = word_to_ix[token]
+    idx = token_to_idx[token]
     token_embedding = torch.tensor(embedding[idx]).view(1, EMBEDDING_DIM)
     cos = (
         F.cosine_similarity(
@@ -198,17 +211,16 @@ def nearest_neighbor(
     similarity = sorted(
         {float(v): i for i, v in enumerate(cos)}.items(), key=lambda x: x[0]
     )
-    print(similarity)
-    vocab_size = len(word_to_ix)
-    ix_to_word = {v: k for k, v in word_to_ix.items()}
+    vocab_size = len(token_to_idx)
+    idx_to_token = {v: k for k, v in token_to_idx.items()}
     nearest_neighbor = [
-        ix_to_word[i]
+        idx_to_token[i]
         for _, i in similarity[vocab_size - top_k - 1 : vocab_size]
     ]
     return nearest_neighbor
 
 
-def generate_sentence(text_fspath: str, model, word_to_ix):
+def generate_sentence(text_fspath: str, model, token_to_idx):
     test_text = ""
     with open(text_fspath, "r") as fIN:
         test_text = fIN.read()
@@ -216,8 +228,8 @@ def generate_sentence(text_fspath: str, model, word_to_ix):
     test_text = preprocess(test_text)
     test_tokens = tokenize(test_text)
     contexts, _ = ngrams(test_tokens)
-    ix_to_word = {v: k for k, v in word_to_ix.items()}
-    context_idxs = map(lambda c: [word_to_ix[w] for w in c], contexts)
+    idx_to_token = {v: k for k, v in token_to_idx.items()}
+    context_idxs = map(lambda c: [token_to_idx[w] for w in c], contexts)
 
     sentences = contexts[0]
     with torch.inference_mode():
@@ -225,12 +237,31 @@ def generate_sentence(text_fspath: str, model, word_to_ix):
         while len(sentences) <= len(test_tokens):
             test = torch.tensor(given_context)
             pred_target_idx = model(test).softmax(dim=1).argmax()
-            pred_target = ix_to_word[pred_target_idx.item()]
+            pred_target = idx_to_token[pred_target_idx.item()]
             sentences.append(pred_target)
             given_context = given_context[1:] + [pred_target_idx.item()]
 
         print(" ".join(sentences))
         print(test_text)
+
+
+def get_target_distro(
+    given_context: list[str], model: NGramModel, token_to_idx: dict[str, int]
+):
+    given_context_tensor = torch.tensor(
+        [token_to_idx[t] for t in given_context]
+    )
+    with torch.inference_mode():
+        pred_targets = model(given_context_tensor).softmax(dim=1)
+        df = pl.DataFrame(
+            {
+                "target_prob": pred_targets.squeeze().detach().numpy(),
+                "pred_target": [t for t in token_to_idx.keys()],
+            }
+        )
+        return df.with_columns(
+            context=pl.lit(" ".join(given_context)),
+        )
 
 
 def run_ngram() -> None:
@@ -245,34 +276,51 @@ def run_ngram() -> None:
     tokens = tokenize(text)
     contexts, targets = ngrams(tokens)
 
-    word_to_ix = {t: i for i, t in enumerate(tokens)}
+    token_to_idx = token_to_index(tokens)
     input_tensor, label_tensor = generate_training_data(
-        contexts, targets, word_to_ix
+        contexts, targets, token_to_idx
     )
 
     model_file = Path("./ngram.safetensor")
     embed_file = Path("./ngram.embed_history.pkl")
     if not model_file.exists():
-        model, embed_history = fit(input_tensor, label_tensor, word_to_ix)
+        model, embed_history = fit(input_tensor, label_tensor, token_to_idx)
         torch.save(model.state_dict(), model_file)
         with open(embed_file, "wb") as f:
             pickle.dump(embed_history, f)
 
     print("Found previous model.")
-    model = NGramModel(len(word_to_ix), EMBEDDING_DIM, CONTEXT_SIZE)
+    model = NGramModel(len(token_to_idx), EMBEDDING_DIM, CONTEXT_SIZE)
     model.load_state_dict(torch.load(model_file, weights_only=True))
 
-    generate_sentence(test_text_fspath, model, word_to_ix)
+    generate_sentence(test_text_fspath, model, token_to_idx)
 
-    with open(embed_file, "rb") as f:
-        embed_history = pickle.load(f)
-        cluster = nearest_neighbor(
-            "cat",
-            embed_history[len(embed_history) - 1],
-            word_to_ix,
-            top_k=5,
-        )
-        plot_embeds(embed_history, word_to_ix, cluster)
+    with open(test_text_fspath, "r") as fIN:
+        test_text = fIN.read()
+        test_text = preprocess(test_text)
+        test_tokens = tokenize(test_text)
+        contexts, _ = ngrams(test_tokens)
+        distro_dfs = [
+            df
+            for df in map(
+                partial(
+                    get_target_distro, model=model, token_to_idx=token_to_idx
+                ),
+                contexts,
+            )
+        ]
+        distro_df = pl.concat(distro_dfs)
+        plot_target_distro(distro_df)
+
+    # with open(embed_file, "rb") as f:
+    #     embed_history = pickle.load(f)
+    #     cluster = nearest_neighbor(
+    #         "cat",
+    #         embed_history[len(embed_history) - 1],
+    #         token_to_idx,
+    #         top_k=5,
+    #     )
+    #     plot_embeds(embed_history, token_to_idx, cluster)
 
 
 if __name__ == "__main__":
