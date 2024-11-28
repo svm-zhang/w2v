@@ -220,7 +220,14 @@ def nearest_neighbor(
     return nearest_neighbor
 
 
-def generate_sentence(text_fspath: str, model, token_to_idx):
+def generate_sentence(
+    text_fspath: str,
+    model: NGramModel,
+    temperature: float,
+    token_to_idx,
+    top_k: int = 0,
+    max_sentences: int = 8,
+):
     test_text = ""
     with open(text_fspath, "r") as fIN:
         test_text = fIN.read()
@@ -234,25 +241,48 @@ def generate_sentence(text_fspath: str, model, token_to_idx):
     sentences = contexts[0]
     with torch.inference_mode():
         given_context = next(context_idxs)
-        while len(sentences) <= len(test_tokens):
+        dot_counter = 0
+        while dot_counter < max_sentences:
             test = torch.tensor(given_context)
-            pred_target_idx = model(test).softmax(dim=1).argmax()
-            pred_target = idx_to_token[pred_target_idx.item()]
-            sentences.append(pred_target)
-            given_context = given_context[1:] + [pred_target_idx.item()]
+            logits = model(test) / temperature
+            if top_k > 0:
+                # idx_to_remove = (
+                #     logits
+                #     < torch.topk(logits, k=top_k, dim=1)[0][..., -1, None]
+                # )
+                # logits[idx_to_remove] = -float("Inf")
+                _, top_k_idx = torch.topk(logits, k=top_k, dim=1)
+                mask = torch.zeros_like(logits, dtype=torch.bool)
+                mask.scatter_(1, top_k_idx, True)
+                logits[~mask] = -float("Inf")
+            probs = torch.softmax(logits, dim=-1)
+            pred_token_idx = torch.multinomial(
+                probs,
+                num_samples=1,
+            )
+            pred_token = idx_to_token[pred_token_idx.item()]
+            sentences.append(pred_token)
+            given_context = given_context[1:] + [pred_token_idx.item()]
+            if pred_token_idx == token_to_idx["."]:
+                dot_counter += 1
 
         print(" ".join(sentences))
         print(test_text)
 
 
 def get_target_distro(
-    given_context: list[str], model: NGramModel, token_to_idx: dict[str, int]
+    given_context: list[str],
+    model: NGramModel,
+    temperature: float,
+    token_to_idx: dict[str, int],
 ):
     given_context_tensor = torch.tensor(
         [token_to_idx[t] for t in given_context]
     )
     with torch.inference_mode():
-        pred_targets = model(given_context_tensor).softmax(dim=1)
+        logits = model(given_context_tensor) / temperature
+        pred_targets = torch.softmax(logits, dim=1)
+        # pred_targets = model(given_context_tensor).softmax(dim=1)
         df = pl.DataFrame(
             {
                 "target_prob": pred_targets.squeeze().detach().numpy(),
@@ -293,24 +323,37 @@ def run_ngram() -> None:
     model = NGramModel(len(token_to_idx), EMBEDDING_DIM, CONTEXT_SIZE)
     model.load_state_dict(torch.load(model_file, weights_only=True))
 
-    generate_sentence(test_text_fspath, model, token_to_idx)
+    temperature = 2
+    top_k = 5
+    max_sentences = 10
+    generate_sentence(
+        test_text_fspath,
+        model,
+        temperature,
+        token_to_idx,
+        top_k=top_k,
+        max_sentences=max_sentences,
+    )
 
-    with open(test_text_fspath, "r") as fIN:
-        test_text = fIN.read()
-        test_text = preprocess(test_text)
-        test_tokens = tokenize(test_text)
-        contexts, _ = ngrams(test_tokens)
-        distro_dfs = [
-            df
-            for df in map(
-                partial(
-                    get_target_distro, model=model, token_to_idx=token_to_idx
-                ),
-                contexts,
-            )
-        ]
-        distro_df = pl.concat(distro_dfs)
-        plot_target_distro(distro_df)
+    # with open(test_text_fspath, "r") as fIN:
+    #     test_text = fIN.read()
+    #     test_text = preprocess(test_text)
+    #     test_tokens = tokenize(test_text)
+    #     contexts, _ = ngrams(test_tokens)
+    #     distro_dfs = [
+    #         df
+    #         for df in map(
+    #             partial(
+    #                 get_target_distro,
+    #                 model=model,
+    #                 temperature=temperature,
+    #                 token_to_idx=token_to_idx,
+    #             ),
+    #             contexts,
+    #         )
+    #     ]
+    #     distro_df = pl.concat(distro_dfs)
+    #     plot_target_distro(distro_df)
 
     # with open(embed_file, "rb") as f:
     #     embed_history = pickle.load(f)
