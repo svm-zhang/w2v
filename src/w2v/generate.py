@@ -9,6 +9,7 @@ def generate_sentence(
     temperature: float,
     token_to_idx,
     top_k: int = 0,
+    top_p: float = 0.0,
     max_sentences: int = 8,
 ) -> str:
     idx_to_token = {v: k for k, v in token_to_idx.items()}
@@ -30,6 +31,22 @@ def generate_sentence(
                 mask = torch.zeros_like(logits, dtype=torch.bool)
                 mask.scatter_(1, top_k_idx, True)
                 logits[~mask] = -float("Inf")
+
+            if top_p > 0.0:
+                logits_so, idx_so = torch.sort(logits, descending=True)
+                cumsum_probs = torch.cumsum(
+                    torch.softmax(logits_so, dim=-1), dim=-1
+                )
+                select_idx = cumsum_probs >= top_p
+                # select_idx[..., 1:] = select_idx[..., :-1].clone()
+                # select_idx[..., 0] = 0
+                select_idx = torch.cat(
+                    (torch.tensor([[False]]), select_idx[..., :-1]), 1
+                )
+                mask = torch.zeros_like(logits, dtype=torch.bool)
+                mask.scatter_(1, idx_so, select_idx)
+                logits[mask] = -float("Inf")
+
             probs = torch.softmax(logits, dim=-1)
             pred_token_idx = torch.multinomial(
                 probs,
