@@ -1,6 +1,5 @@
 import pickle
 import sys
-from functools import partial
 from pathlib import Path
 from pprint import pprint
 
@@ -151,10 +150,7 @@ def fit(
     return model, embed_history
 
 
-# TODO: implement to add randomness when generating text given context (like temperature)
 # TODO: implement device
-
-
 def generate_training_data(contexts, targets, token_to_idx):
     context_idxs = list(map(lambda c: [token_to_idx[w] for w in c], contexts))
     target_idxs = [token_to_idx[w] for w in targets]
@@ -220,80 +216,6 @@ def nearest_neighbor(
     return nearest_neighbor
 
 
-def generate_sentence(
-    text_fspath: str,
-    model: NGramModel,
-    temperature: float,
-    token_to_idx,
-    top_k: int = 0,
-    max_sentences: int = 8,
-):
-    test_text = ""
-    with open(text_fspath, "r") as fIN:
-        test_text = fIN.read()
-
-    test_text = preprocess(test_text)
-    test_tokens = tokenize(test_text)
-    contexts, _ = ngrams(test_tokens)
-    idx_to_token = {v: k for k, v in token_to_idx.items()}
-    context_idxs = map(lambda c: [token_to_idx[w] for w in c], contexts)
-
-    sentences = contexts[0]
-    with torch.inference_mode():
-        given_context = next(context_idxs)
-        dot_counter = 0
-        while dot_counter < max_sentences:
-            test = torch.tensor(given_context)
-            logits = model(test) / temperature
-            if top_k > 0:
-                # idx_to_remove = (
-                #     logits
-                #     < torch.topk(logits, k=top_k, dim=1)[0][..., -1, None]
-                # )
-                # logits[idx_to_remove] = -float("Inf")
-                _, top_k_idx = torch.topk(logits, k=top_k, dim=1)
-                mask = torch.zeros_like(logits, dtype=torch.bool)
-                mask.scatter_(1, top_k_idx, True)
-                logits[~mask] = -float("Inf")
-            probs = torch.softmax(logits, dim=-1)
-            pred_token_idx = torch.multinomial(
-                probs,
-                num_samples=1,
-            )
-            pred_token = idx_to_token[pred_token_idx.item()]
-            sentences.append(pred_token)
-            given_context = given_context[1:] + [pred_token_idx.item()]
-            if pred_token_idx == token_to_idx["."]:
-                dot_counter += 1
-
-        print(" ".join(sentences))
-        print(test_text)
-
-
-def get_target_distro(
-    given_context: list[str],
-    model: NGramModel,
-    temperature: float,
-    token_to_idx: dict[str, int],
-):
-    given_context_tensor = torch.tensor(
-        [token_to_idx[t] for t in given_context]
-    )
-    with torch.inference_mode():
-        logits = model(given_context_tensor) / temperature
-        pred_targets = torch.softmax(logits, dim=1)
-        # pred_targets = model(given_context_tensor).softmax(dim=1)
-        df = pl.DataFrame(
-            {
-                "target_prob": pred_targets.squeeze().detach().numpy(),
-                "pred_target": [t for t in token_to_idx.keys()],
-            }
-        )
-        return df.with_columns(
-            context=pl.lit(" ".join(given_context)),
-        )
-
-
 def run_ngram() -> None:
     train_text_fspath = sys.argv[1]
     test_text_fspath = sys.argv[2]
@@ -323,8 +245,9 @@ def run_ngram() -> None:
     model = NGramModel(len(token_to_idx), EMBEDDING_DIM, CONTEXT_SIZE)
     model.load_state_dict(torch.load(model_file, weights_only=True))
 
-    temperature = 2
-    top_k = 5
+    temperature = 3
+    top_k = 0
+    top_p = 0.5
     max_sentences = 10
     generate_sentence(
         test_text_fspath,
@@ -332,6 +255,7 @@ def run_ngram() -> None:
         temperature,
         token_to_idx,
         top_k=top_k,
+        top_p=top_p,
         max_sentences=max_sentences,
     )
 
